@@ -5,6 +5,7 @@ import com.spshpau.chatservice.controller.notifications.ChatNotification;
 import com.spshpau.chatservice.model.ChatMessage;
 import com.spshpau.chatservice.services.ChatMessageService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -18,6 +19,7 @@ import java.util.UUID;
 
 @Controller
 @RequiredArgsConstructor
+@Slf4j
 public class ChatMessageControllerImpl implements ChatMessageController {
     private final SimpMessagingTemplate messagingTemplate;
     private final ChatMessageService chatMessageService;
@@ -36,6 +38,7 @@ public class ChatMessageControllerImpl implements ChatMessageController {
                         .content(savedMsg.getContent())
                         .build()
         );
+        log.info("Attempted to send notification for message {} to user UUID {}", savedMsg.getId(), savedMsg.getRecipientId());
     }
 
     @Override

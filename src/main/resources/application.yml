@@ -34,4 +34,4 @@ jwt:
   auth:
     converter:
       resource-id: spshpau-rest-api
-      principle-attribute: preferred_username
+      principle-attribute: sub
