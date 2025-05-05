@@ -1,6 +1,7 @@
 package com.spshpau.chatservice.controller.impl;
 
 import com.spshpau.chatservice.controller.UserController;
+import com.spshpau.chatservice.controller.dto.UserPayloadDto;
 import com.spshpau.chatservice.model.User;
 import com.spshpau.chatservice.services.UserService;
 import lombok.RequiredArgsConstructor;
@@ -26,48 +27,33 @@ public class UserControllerImpl implements UserController {
 
     @Override
     @MessageMapping("/user.addUser")
-    @SendTo("/user/topic")
-    public User addUser(@AuthenticationPrincipal Jwt jwt) {
-        if (jwt == null) {
+    @SendTo("/topic/presence")
+    public User addUser(@Payload UserPayloadDto payload) {
+        if (payload == null || payload.getUserId() == null || payload.getUsername() == null) {
             return null;
         }
-
-        // Extract details directly from the injected Jwt object
-        String sub = jwt.getClaimAsString(JwtClaimNames.SUB);
-        String username = jwt.getClaimAsString("preferred_username");
-        String firstName = jwt.getClaimAsString("given_name");
-        String lastName = jwt.getClaimAsString("family_name");
-
-        if (sub == null || username == null) {
-            return null;
-        }
-
         try {
-            UUID userId = UUID.fromString(sub);
-            return userService.saveUser(userId, username, firstName, lastName);
+            UUID userId = UUID.fromString(payload.getUserId());
+            return userService.saveUser(userId, payload.getUsername(), payload.getFirstName(), payload.getLastName());
         } catch (IllegalArgumentException e) {
+            return null;
+        } catch (Exception e) {
             return null;
         }
     }
 
     @Override
     @MessageMapping("/user.disconnectUser")
-    @SendTo("/user/topic")
-    public User disconnect(@AuthenticationPrincipal Jwt jwt) {
-        if (jwt == null) {
+    @SendTo("/topic/presence")
+    public User disconnect(@Payload UserPayloadDto payload) {
+        if (payload == null || payload.getUserId() == null) {
             return null;
         }
-
-        String sub = jwt.getClaimAsString(JwtClaimNames.SUB);
-
-        if (sub == null) {
-            return null;
-        }
-
         try {
-            UUID userId = UUID.fromString(sub);
+            UUID userId = UUID.fromString(payload.getUserId());
+            String username = payload.getUsername();
             return userService.disconnect(userId);
-        } catch (IllegalArgumentException e) {
+        } catch (Exception e) {
             return null;
         }
     }

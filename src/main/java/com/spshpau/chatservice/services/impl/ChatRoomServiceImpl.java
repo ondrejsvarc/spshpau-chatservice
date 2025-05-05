@@ -22,29 +22,39 @@ public class ChatRoomServiceImpl implements ChatRoomService {
             boolean createNewRoomIfNotExists
     ) {
         return chatRoomRepository.findBySenderIdAndRecipientId(senderId, recipientId)
-                .map(ChatRoom::getId)
+                .map(ChatRoom::getChatId)
                 .or(() -> {
                     if (createNewRoomIfNotExists) {
-                        var chatId = createChatId(senderId, recipientId);
+                        var chatId = createChatRoomEntries(senderId, recipientId);
                         return Optional.of(chatId);
                     }
                     return Optional.empty();
                 });
     }
 
-    private UUID createChatId(UUID senderId, UUID recipientId) {
-        String combinedString = senderId.toString() + "|" + recipientId.toString();
+    private UUID createChatRoomEntries(UUID senderId, UUID recipientId) {
+        String combinedString;
+        if (senderId.compareTo(recipientId) < 0) {
+            combinedString = senderId.toString() + "|" + recipientId.toString();
+        } else {
+            combinedString = recipientId.toString() + "|" + senderId.toString();
+        }
         byte[] bytes = combinedString.getBytes(StandardCharsets.UTF_8);
         UUID chatId = UUID.nameUUIDFromBytes(bytes);
 
-        // ToDo - Maybe explicitly specify id?
+        // Explicitly generate unique random primary keys
+        UUID senderRecipientDocId = UUID.randomUUID();
+        UUID recipientSenderDocId = UUID.randomUUID();
+
         ChatRoom senderRecipient = ChatRoom.builder()
+                .id(senderRecipientDocId)
                 .chatId(chatId)
                 .senderId(senderId)
                 .recipientId(recipientId)
                 .build();
 
         ChatRoom recipientSender = ChatRoom.builder()
+                .id(recipientSenderDocId)
                 .chatId(chatId)
                 .senderId(recipientId)
                 .recipientId(senderId)

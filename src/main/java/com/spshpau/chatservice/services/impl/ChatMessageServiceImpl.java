@@ -19,10 +19,18 @@ public class ChatMessageServiceImpl implements ChatMessageService {
 
     @Override
     public ChatMessage save(ChatMessage chatMessage) {
-        var chatId = chatRoomService.getChatRoomId(chatMessage.getSenderId(), chatMessage.getRecipientId(), true)
-                .orElseThrow(); // ToDo - Create Exception
+        chatMessage.setId(UUID.randomUUID());
+
+        var chatId = chatRoomService.getChatRoomId(
+                        chatMessage.getSenderId(),
+                        chatMessage.getRecipientId(),
+                        true
+                )
+                .orElseThrow(() -> new RuntimeException("Failed to get or create chat room for users "
+                        + chatMessage.getSenderId() + " and " + chatMessage.getRecipientId()));
 
         chatMessage.setChatId(chatId);
+
         chatMessageRepository.save(chatMessage);
         return chatMessage;
     }
@@ -31,6 +39,6 @@ public class ChatMessageServiceImpl implements ChatMessageService {
     public List<ChatMessage> findChatMessages(UUID senderId, UUID recipientId) {
         var chatId = chatRoomService.getChatRoomId(senderId, recipientId, false);
 
-        return chatId.map(chatMessageRepository::findByChatId).orElse(new ArrayList<>());
+        return chatId.map(chatMessageRepository::findByChatId).orElseGet(ArrayList::new);
     }
 }

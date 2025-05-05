@@ -37,10 +37,11 @@ if (typeof oidc === 'undefined') {
 const userManager = new oidc.UserManager(oidcConfig);
 
 // --- Global State ---
-let username = null; // Keycloak preferred_username
+let username = null; // Keycloak preferred_username (for display)
+let userUUID = null; // Keycloak sub claim (UUID, as string initially)
 let fullname = null; // Keycloak name
 let stompClient = null;
-let selectedUserId = null;
+let selectedUserId = null; // THIS WILL NOW STORE THE RECIPIENT'S UUID
 let currentUser = null; // Stores the user object from userManager
 
 // --- Authentication Functions ---
@@ -50,10 +51,12 @@ async function getUser() {
     if (currentUser && !currentUser.expired) {
         console.log('User is logged in:', currentUser.profile);
         username = currentUser.profile.preferred_username;
-        fullname = currentUser.profile.name || username; // Fallback
+        userUUID = currentUser.profile.sub;
+        fullname = currentUser.profile.name || username;
         return currentUser;
     }
     console.log('User not logged in or session expired.');
+    userUUID = null; // Clear UUID if not logged in
     return null;
 }
 
@@ -94,19 +97,23 @@ async function login() {
 
 async function logoutUser() {
     console.log('Logging out...');
-    const user = await userManager.getUser(); // Get user for id_token_hint
+    const user = await userManager.getUser(); // Get user for id_token_hint and payload
 
-    if (stompClient && stompClient.connected) {
-        console.log('Sending disconnect message to backend...');
-        stompClient.send("/app/user.disconnectUser", {});
+    if (stompClient && stompClient.connected && userUUID) { // Check userUUID
+        console.log('Sending disconnect message to backend with payload...');
+        // Send payload with necessary identifiers
+        const disconnectPayload = {
+            userId: userUUID // Use the stored UUID
+            // username, firstName, lastName are optional for disconnect if backend only needs ID
+        };
+        stompClient.send("/app/user.disconnectUser", {}, JSON.stringify(disconnectPayload)); // <-- SEND PAYLOAD
+
         stompClient.disconnect(() => {
             console.log('STOMP client disconnected.');
-            // Initiate Keycloak logout *after* STOMP disconnect if needed
             userManager.signoutRedirect({ id_token_hint: user ? user.id_token : undefined })
                 .catch(err => console.error("Error during signoutRedirect:", err));
         });
     } else {
-        // If STOMP wasn't connected, just log out from Keycloak
         userManager.signoutRedirect({ id_token_hint: user ? user.id_token : undefined })
             .catch(err => console.error("Error during signoutRedirect:", err));
     }
@@ -114,6 +121,7 @@ async function logoutUser() {
     chatPage.classList.add('hidden');
     loadingPage.classList.remove('hidden');
     connectingElement.textContent = 'Logging out...';
+    userUUID = null; // Clear UUID on logout
 }
 
 // --- Application Initialization ---
@@ -160,6 +168,7 @@ async function setupUIAndConnect(user) {
     console.log('Setting up UI and connecting WebSocket for user:', user.profile.preferred_username);
     currentUser = user; // Store user globally
     username = user.profile.preferred_username;
+    userUUID = user.profile.sub; // <-- Store UUID here too
     fullname = user.profile.name || username; // Fallback
 
     // Update UI
@@ -233,13 +242,22 @@ function onConnected() {
     console.log('WebSocket connected successfully.');
     connectingElement.textContent = ''; // Clear connecting message
 
-    // Subscribe to user-specific messages
-    stompClient.subscribe(`/user/${username}/queue/messages`, onMessageReceived);
-    // Subscribe to public user notifications (user connect/disconnect broadcasts)
-    stompClient.subscribe(`/user/topic`, onPresenceUpdate); // Use /user/topic now
+    stompClient.subscribe(`/user/${userUUID}/queue/messages`, onMessageReceived);
+    stompClient.subscribe(`/topic/presence`, onPresenceUpdate);
 
-    // Register the connected user (inform backend - payload ignored)
-    stompClient.send("/app/user.addUser", {});
+    // Register the connected user - SEND PAYLOAD
+    if (userUUID && username) { // Ensure we have the necessary info
+        const connectPayload = {
+            userId: userUUID, // Keycloak 'sub'
+            username: username, // Keycloak 'preferred_username'
+            firstName: currentUser.profile.given_name, // Optional: Add if available
+            lastName: currentUser.profile.family_name // Optional: Add if available
+        };
+        stompClient.send("/app/user.addUser", {}, JSON.stringify(connectPayload)); // <-- SEND PAYLOAD
+        console.log('Sent addUser message with payload:', connectPayload);
+    } else {
+        console.error("Cannot send addUser message: Missing user UUID or username.");
+    }
 
     // Display initially connected users
     findAndDisplayConnectedUsers().then();
@@ -284,16 +302,14 @@ async function findAndDisplayConnectedUsers() {
         }
 
         let connectedUsers = await connectedUsersResponse.json();
-        // Filter out the current user based on the username
-        connectedUsers = connectedUsers.filter(user => user.username !== username);
+        // Filter out the current user based on the UUID
+        connectedUsers = connectedUsers.filter(user => user.id !== userUUID); // <-- Use user.id and userUUID
+
         connectedUsersList.innerHTML = ''; // Clear existing list
         connectedUsers.forEach(user => {
+            // Pass the full user object which contains the ID (UUID)
             appendUserElement(user, connectedUsersList);
-            if (connectedUsers.indexOf(user) < connectedUsers.length - 1) {
-                const separator = document.createElement('li');
-                separator.classList.add('separator');
-                connectedUsersList.appendChild(separator);
-            }
+            // ... (separator logic remains the same) ...
         });
         console.log('Displayed connected users:', connectedUsers.length);
     } catch (error) {
@@ -305,15 +321,21 @@ async function findAndDisplayConnectedUsers() {
 function appendUserElement(user, list) {
     const listItem = document.createElement('li');
     listItem.classList.add('user-item');
-    listItem.id = user.username; // Use username as the unique ID
+    // Use username for display ID if needed, but store UUID in data attribute
+    listItem.id = `user-item-${user.username}`; // Use username for DOM ID if easier for querySelector later
+    listItem.dataset.userId = user.id; // <-- STORE UUID HERE
+    listItem.dataset.username = user.username; // Store username too if needed
+
+    // ... (img, usernameSpan, receivedMsgs spans remain the same, use user.fullName || user.username) ...
     const userImage = document.createElement('img');
-    userImage.src = '../img/user_icon.png'; // Default icon
+    userImage.src = '../img/user_icon.png';
     userImage.alt = user.fullName || user.username;
     const usernameSpan = document.createElement('span');
-    usernameSpan.textContent = user.fullName || user.username; // Display fullname or username
+    usernameSpan.textContent = user.fullName || user.username;
     const receivedMsgs = document.createElement('span');
     receivedMsgs.textContent = '0';
     receivedMsgs.classList.add('nbr-msg', 'hidden');
+
     listItem.appendChild(userImage);
     listItem.appendChild(usernameSpan);
     listItem.appendChild(receivedMsgs);
@@ -325,11 +347,21 @@ function appendUserElement(user, list) {
 function userItemClick(event) {
     document.querySelectorAll('.user-item').forEach(item => item.classList.remove('active'));
     messageForm.classList.remove('hidden');
+
     const clickedUser = event.currentTarget;
     clickedUser.classList.add('active');
-    selectedUserId = clickedUser.getAttribute('id'); // Username is the ID
-    console.log(`Selected user: ${selectedUserId}`);
-    fetchAndDisplayUserChat().then(); // Fetch history for selected user
+
+    // Get the UUID from the data attribute
+    selectedUserId = clickedUser.dataset.userId; // <-- GET UUID HERE
+    const selectedUsername = clickedUser.dataset.username; // Get username for display if needed
+
+    console.log(`Selected user UUID: ${selectedUserId}, Username: ${selectedUsername}`);
+
+    // Fetch and display chat history using UUIDs
+    fetchAndDisplayUserChat().then();
+
+    // Clear notification count (querying by dataset might be needed if ID changed)
+    // Querying the clicked element directly is safer:
     const nbrMsg = clickedUser.querySelector('.nbr-msg');
     nbrMsg.classList.add('hidden');
     nbrMsg.textContent = '0';
@@ -337,8 +369,8 @@ function userItemClick(event) {
 
 // --- Chat Message Handling (fetch needs updated token retrieval) ---
 async function fetchAndDisplayUserChat() {
-    if (!selectedUserId || !username) {
-        console.error("Cannot fetch chat: Missing selected user or current user.");
+    if (!selectedUserId || !userUUID) {
+        console.error("Cannot fetch chat: Missing selected user UUID or current user UUID.");
         chatArea.innerHTML = '<p>Error fetching chat history.</p>';
         return;
     }
@@ -348,9 +380,11 @@ async function fetchAndDisplayUserChat() {
         chatArea.innerHTML = '<p>Authentication error. Cannot load chat.</p>';
         return;
     }
+
     try {
-        console.log(`Workspaceing chat between ${username} and ${selectedUserId}`);
-        const userChatResponse = await fetch(`/messages/<span class="math-inline">\{username\}/</span>{selectedUserId}`, {
+        console.log(`Workspaceing chat between ${userUUID} and ${selectedUserId}`);
+        // Use UUIDs in the REST URL
+        const userChatResponse = await fetch(`/messages/${userUUID}/${selectedUserId}`, {
             headers: { 'Authorization': 'Bearer ' + accessToken }
         });
 
@@ -362,10 +396,14 @@ async function fetchAndDisplayUserChat() {
             throw new Error(`HTTP error! status: ${userChatResponse.status}`);
         }
         const userChat = await userChatResponse.json();
-        chatArea.innerHTML = ''; // Clear previous messages
+        chatArea.innerHTML = '';
         if (userChat.length === 0) {
-            chatArea.innerHTML = `<p>No messages with ${selectedUserId} yet.</p>`;
+            // Optional: Get selected username for display message
+            const selectedUserElement = connectedUsersList.querySelector(`[data-user-id="${selectedUserId}"]`);
+            const selectedUsernameDisplay = selectedUserElement ? selectedUserElement.dataset.username : selectedUserId;
+            chatArea.innerHTML = `<p>No messages with ${selectedUsernameDisplay} yet.</p>`;
         } else {
+            // Display message - assumes chat.senderId from backend IS the UUID
             userChat.forEach(chat => displayMessage(chat.senderId, chat.content));
         }
         chatArea.scrollTop = chatArea.scrollHeight;
@@ -380,16 +418,20 @@ async function fetchAndDisplayUserChat() {
 function sendMessage(event) {
     event.preventDefault();
     const messageContent = messageInput.value.trim();
-    if (messageContent && stompClient && stompClient.connected && selectedUserId && username) {
+    // Ensure selectedUserId is a UUID and userUUID is set
+    if (messageContent && stompClient && stompClient.connected && selectedUserId && userUUID) {
         const chatMessage = {
-            senderId: username,
-            recipientId: selectedUserId,
+            senderId: userUUID,       // Current user's UUID
+            recipientId: selectedUserId, // Selected user's UUID
             content: messageContent,
             timestamp: new Date()
         };
-        console.log('Sending message via STOMP:', chatMessage);
+        console.log('Sending chat message via STOMP:', chatMessage);
+        // Assumes backend /app/chat handler expects UUIDs in ChatMessage payload
         stompClient.send("/app/chat", {}, JSON.stringify(chatMessage));
-        displayMessage(username, messageContent); // Display sent message locally
+
+        // Display message locally using UUID
+        displayMessage(userUUID, messageContent);
         messageInput.value = '';
         chatArea.scrollTop = chatArea.scrollHeight;
     } else {
@@ -402,15 +444,19 @@ function sendMessage(event) {
 // onMessageReceived remains the same as previous version
 function onMessageReceived(payload) {
     console.log('Message received via WebSocket', payload);
-    const message = JSON.parse(payload.body);
+    const message = JSON.parse(payload.body); // Assumes message.senderId IS UUID
+
+    // Compare received UUID with selected UUID
     if (selectedUserId && selectedUserId === message.senderId) {
         displayMessage(message.senderId, message.content);
         chatArea.scrollTop = chatArea.scrollHeight;
     } else {
+        // Find user item by data attribute containing the UUID
         console.log(`Notification: New message from ${message.senderId}`);
-        const notifiedUser = document.querySelector(`#${message.senderId}`);
-        if (notifiedUser) {
-            const nbrMsg = notifiedUser.querySelector('.nbr-msg');
+        const notifiedUserElement = connectedUsersList.querySelector(`[data-user-id="${message.senderId}"]`);
+
+        if (notifiedUserElement) {
+            const nbrMsg = notifiedUserElement.querySelector('.nbr-msg');
             if (nbrMsg) {
                 nbrMsg.classList.remove('hidden');
                 nbrMsg.textContent = isNaN(parseInt(nbrMsg.textContent)) ? '1' : (parseInt(nbrMsg.textContent) + 1).toString();
@@ -423,10 +469,12 @@ function onMessageReceived(payload) {
 }
 
 // displayMessage remains the same as previous version
-function displayMessage(senderId, content) {
+function displayMessage(senderIdUUID, content) {
     const messageContainer = document.createElement('div');
     messageContainer.classList.add('message');
-    if (senderId === username) { // Compare with global username
+
+    // Compare with current user's UUID
+    if (senderIdUUID === userUUID) {
         messageContainer.classList.add('sender');
     } else {
         messageContainer.classList.add('receiver');

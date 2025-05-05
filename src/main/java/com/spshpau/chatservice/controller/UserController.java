@@ -1,24 +1,21 @@
 package com.spshpau.chatservice.controller;
 
+import com.spshpau.chatservice.controller.dto.UserPayloadDto;
 import com.spshpau.chatservice.model.User;
-import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.messaging.handler.annotation.Payload;
 
 public interface UserController {
     /**
-     * Handles user connection based on the provided JWT.
-     * Implementation will extract details from the JWT.
-     *
-     * @param jwt The authenticated user's JWT.
+     * Handles user connection based on data sent in payload.
+     * @param payload DTO containing user identifiers.
      * @return The User object after being marked ONLINE.
      */
-    User addUser(Jwt jwt);
+    User addUser(@Payload UserPayloadDto payload);
 
     /**
-     * Handles user disconnection based on the provided JWT.
-     * Implementation will extract details from the JWT.
-     *
-     * @param jwt The authenticated user's JWT.
+     * Handles user disconnection based on data sent in payload.
+     * @param payload DTO containing user identifiers (at least userId).
      * @return The User object after being marked OFFLINE.
      */
-    User disconnect(Jwt jwt);
+    User disconnect(@Payload UserPayloadDto payload);
 }
