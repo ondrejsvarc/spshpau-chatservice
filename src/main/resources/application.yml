@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: chatservice
+  config:
+    import: optional:configserver:http://localhost:8888
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://192.168.1.112:8080/realms/SPSHPAU
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/protocol/openid-connect/certs
+
+  data:
+    mongodb:
+      username: spshpau
+      password: admin
+      host: 192.168.1.112
+      port: 27017
+      database: chat
+      authentication-database: admin
+
+server:
+  port: 8091
+
+eureka:
+  instance:
+    hostname: localhost
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka
+
+jwt:
+  auth:
+    converter:
+      resource-id: spshpau-rest-api
+      principle-attribute: preferred_username
