@@ -58,8 +58,15 @@ public class UserControllerImpl implements UserController {
         }
     }
 
+    @Override
     @GetMapping("/users")
     public ResponseEntity<List<User>> findConnectedUsers() {
         return ResponseEntity.ok(userService.findConnectedUsers());
+    }
+
+    @Override
+    @GetMapping("/chats/me")
+    public ResponseEntity<List<User>> getMyChats(@AuthenticationPrincipal Jwt jwt) {
+        return ResponseEntity.ok(userService.findMyChats(jwt));
     }
 }

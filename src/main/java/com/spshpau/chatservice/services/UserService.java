@@ -1,6 +1,7 @@
 package com.spshpau.chatservice.services;
 
 import com.spshpau.chatservice.model.User;
+import org.springframework.security.oauth2.jwt.Jwt;
 
 import java.util.List;
 import java.util.UUID;
@@ -27,4 +28,6 @@ public interface UserService {
     User disconnect(UUID userId);
 
     List<User> findConnectedUsers();
+
+    List<User> findMyChats(Jwt jwt);
 }

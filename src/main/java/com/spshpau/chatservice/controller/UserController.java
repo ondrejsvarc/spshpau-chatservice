@@ -2,7 +2,11 @@ package com.spshpau.chatservice.controller;
 
 import com.spshpau.chatservice.controller.dto.UserPayloadDto;
 import com.spshpau.chatservice.model.User;
+import org.springframework.http.ResponseEntity;
 import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.security.oauth2.jwt.Jwt;
+
+import java.util.List;
 
 public interface UserController {
     /**
@@ -18,4 +22,8 @@ public interface UserController {
      * @return The User object after being marked OFFLINE.
      */
     User disconnect(@Payload UserPayloadDto payload);
+
+    ResponseEntity<List<User>> findConnectedUsers();
+
+    ResponseEntity<List<User>> getMyChats(Jwt jwt);
 }
