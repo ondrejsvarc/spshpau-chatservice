@@ -202,3 +202,22 @@ a.logout {
     color: #fff;
     text-decoration: none;
 }
+
+.user-item .online-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    background-color: #2ecc71;
+    border-radius: 50%;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.user-item .online-indicator.offline {
+    display: none;
+}
+
+.user-item span:first-of-type {
+    flex-grow: 1;
+    margin-right: 5px;
+}
