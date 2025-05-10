@@ -66,7 +66,7 @@ class UserServiceImplTest {
             return savedUser;
         });
 
-        User result = userService.saveUser(testUserId, testUsername, testFirstName, testLastName);
+        User result = userService.saveUser(testUserId, testUsername, testFirstName, testLastName, false);
 
         assertNotNull(result);
         assertEquals(testUserId, result.getId());
@@ -93,7 +93,7 @@ class UserServiceImplTest {
         when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         String newFirstName = "UpdatedTest";
-        User result = userService.saveUser(testUserId, testUsername, newFirstName, testLastName);
+        User result = userService.saveUser(testUserId, testUsername, newFirstName, testLastName, false);
 
         assertNotNull(result);
         assertEquals(testUserId, result.getId());
@@ -108,6 +108,32 @@ class UserServiceImplTest {
         assertEquals(testUserId, capturedUser.getId());
         assertEquals(newFirstName, capturedUser.getFirstName());
         assertEquals(StatusEnum.ONLINE, capturedUser.getStatus());
+        verify(userRepository, times(1)).findById(testUserId);
+        verify(userRepository, times(1)).save(any(User.class));
+    }
+
+    @Test
+    void saveUser_whenExistingUser_shouldUpdateAndSaveUserAndKeepStatus() {
+        testUser.setStatus(StatusEnum.OFFLINE);
+        when(userRepository.findById(testUserId)).thenReturn(Optional.of(testUser));
+        when(userRepository.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        String newFirstName = "UpdatedTest";
+        User result = userService.saveUser(testUserId, testUsername, newFirstName, testLastName, true);
+
+        assertNotNull(result);
+        assertEquals(testUserId, result.getId());
+        assertEquals(testUsername, result.getUsername());
+        assertEquals(newFirstName, result.getFirstName());
+        assertEquals(StatusEnum.OFFLINE, result.getStatus());
+
+        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(userCaptor.capture());
+        User capturedUser = userCaptor.getValue();
+
+        assertEquals(testUserId, capturedUser.getId());
+        assertEquals(newFirstName, capturedUser.getFirstName());
+        assertEquals(StatusEnum.OFFLINE, capturedUser.getStatus());
         verify(userRepository, times(1)).findById(testUserId);
         verify(userRepository, times(1)).save(any(User.class));
     }
