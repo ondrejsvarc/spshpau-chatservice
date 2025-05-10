@@ -44,7 +44,7 @@ public class UserControllerImpl implements UserController {
         }
         try {
             UUID userId = UUID.fromString(payload.getUserId());
-            return userService.saveUser(userId, payload.getUsername(), payload.getFirstName(), payload.getLastName());
+            return userService.saveUser(userId, payload.getUsername(), payload.getFirstName(), payload.getLastName(), false);
         } catch (IllegalArgumentException e) {
             log.error("AddUser: Invalid UUID format in payload userId: {}", payload.getUserId(), e);
             return null;

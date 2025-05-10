@@ -24,7 +24,7 @@ public class UserServiceImpl implements UserService {
     private final UserClient userClient;
 
     @Override
-    public User saveUser(UUID userId, String username, String firstName, String lastName) {
+    public User saveUser(UUID userId, String username, String firstName, String lastName, boolean fetch) {
         log.info("Attempting to save or update user with ID: {}, Username: {}", userId, username);
         User user = userRepository.findById(userId)
                 .orElse(new User());
@@ -40,7 +40,9 @@ public class UserServiceImpl implements UserService {
         user.setUsername(username);
         user.setFirstName(firstName);
         user.setLastName(lastName);
-        user.setStatus(StatusEnum.ONLINE);
+        if (!fetch) {
+            user.setStatus(StatusEnum.ONLINE);
+        }
 
         User savedUser = userRepository.save(user);
         log.info("{} user with ID: {}, Username: {} successfully. Status set to ONLINE.",
@@ -96,7 +98,7 @@ public class UserServiceImpl implements UserService {
         }
 
         log.debug("Ensuring local user record exists for user ID: {}, Username: {}", keycloakUuid, username);
-        saveUser(keycloakUuid, username, firstName, lastName);
+        saveUser(keycloakUuid, username, firstName, lastName, false);
 
         String tokenValue = jwt.getTokenValue();
         String bearerToken = "Bearer " + tokenValue;
@@ -118,7 +120,7 @@ public class UserServiceImpl implements UserService {
                 continue;
             }
             log.debug("Processing connection DTO: ID={}, Username={}", dto.getId(), dto.getUsername());
-            User chatPartner = saveUser(dto.getId(), dto.getUsername(), dto.getFirstName(), dto.getLastName());
+            User chatPartner = saveUser(dto.getId(), dto.getUsername(), dto.getFirstName(), dto.getLastName(), true);
             chats.add(chatPartner);
         }
 
