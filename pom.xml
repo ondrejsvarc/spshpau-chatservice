@@ -10,7 +10,7 @@
 	</parent>
 	<groupId>com.spshpau</groupId>
 	<artifactId>chatservice</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>0.1.1-ALPHA</version>
 	<name>chatservice</name>
 	<description>Chat service for spshpau project</description>
 	<url/>
