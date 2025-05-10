@@ -98,7 +98,7 @@ public class ChatMessageControllerImpl implements ChatMessageController {
 
 
     @Override
-    @GetMapping("/messages/{senderId}/{recipientId}")
+    @GetMapping("/api/v1/messages/{senderId}/{recipientId}")
     public ResponseEntity<List<ChatMessage>> findChatMessages (
             @PathVariable("senderId") UUID senderId,
             @PathVariable("recipientId") UUID recipientId

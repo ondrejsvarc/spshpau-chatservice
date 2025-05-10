@@ -17,7 +17,7 @@ public interface UserService {
      * @param lastName    The user's last name (from JWT family_name claim, can be null).
      * @return The saved or updated User object.
      */
-    User saveUser(UUID userId, String username, String firstName, String lastName);
+    User saveUser(UUID userId, String username, String firstName, String lastName, boolean fetch);
 
     /**
      * Marks a user as OFFLINE based on their ID.

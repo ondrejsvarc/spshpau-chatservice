@@ -44,7 +44,7 @@ public class UserControllerImpl implements UserController {
         }
         try {
             UUID userId = UUID.fromString(payload.getUserId());
-            return userService.saveUser(userId, payload.getUsername(), payload.getFirstName(), payload.getLastName());
+            return userService.saveUser(userId, payload.getUsername(), payload.getFirstName(), payload.getLastName(), false);
         } catch (IllegalArgumentException e) {
             log.error("AddUser: Invalid UUID format in payload userId: {}", payload.getUserId(), e);
             return null;
@@ -75,13 +75,13 @@ public class UserControllerImpl implements UserController {
     }
 
     @Override
-    @GetMapping("/users")
+    @GetMapping("/api/v1/chats/users")
     public ResponseEntity<List<User>> findConnectedUsers() {
         return ResponseEntity.ok(userService.findConnectedUsers());
     }
 
     @Override
-    @GetMapping("/chats/me")
+    @GetMapping("/api/v1/chats/me")
     public ResponseEntity<List<User>> getMyChats(@AuthenticationPrincipal Jwt jwt) {
         try {
             return ResponseEntity.ok(userService.findMyChats(jwt));
@@ -92,7 +92,7 @@ public class UserControllerImpl implements UserController {
     }
 
     @Override
-    @GetMapping("/chats/summary")
+    @GetMapping("/api/v1/chats/summary")
     public ResponseEntity<List<ChatSummaryDto>> getMyChatSummaries(@AuthenticationPrincipal Jwt jwt) {
         if (jwt == null) {
             log.warn("Attempted to get chat summaries without authentication.");

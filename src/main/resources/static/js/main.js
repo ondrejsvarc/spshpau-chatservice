@@ -245,8 +245,8 @@ async function findAndDisplayChatSummaries() {
         return;
     }
     try {
-        console.log('Fetching chat summaries from /chats/summary...');
-        const response = await fetch('/chats/summary', {
+        console.log('Fetching chat summaries from /api/v1/chats/summary...');
+        const response = await fetch('/api/v1/chats/summary', {
             headers: { 'Authorization': 'Bearer ' + accessToken }
         });
 
@@ -417,7 +417,7 @@ async function fetchAndDisplayUserChat(targetUserUuid, targetChatId) {
     }
 
     try {
-        const response = await fetch(`/messages/${userUUID}/${targetUserUuid}`, {
+        const response = await fetch(`/api/v1/messages/${userUUID}/${targetUserUuid}`, {
             headers: { 'Authorization': 'Bearer ' + accessToken }
         });
         console.log('fetchAndDisplayUserChat - Response status:', response.status, 'for target:', targetUserUuid);
