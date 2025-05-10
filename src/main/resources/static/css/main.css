@@ -221,3 +221,45 @@ a.logout {
     flex-grow: 1;
     margin-right: 5px;
 }
+
+/* Message Status Indicators */
+.message .message-status {
+    font-size: 0.7em;
+    color: #95a5a6;
+    margin-left: 5px;
+    float: right;
+    line-height: normal;
+}
+
+.message.sender .message-status {
+    display: inline-block;
+}
+.message.receiver .message-status {
+    display: none;
+}
+
+.message-status.delivered {
+    color: #7f8c8d;
+}
+
+.message-status.read {
+    color: #3498db;
+}
+
+/* Styling for unread count badge in user list */
+.user-item span.nbr-msg {
+    margin-left: auto;
+    background-color: #e74c3c;
+    color: white;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 0.75em;
+    font-weight: bold;
+    min-width: 18px;
+    text-align: center;
+    line-height: 1.2;
+    height: auto;
+}
+.user-item span.nbr-msg.hidden {
+    display: none;
+}

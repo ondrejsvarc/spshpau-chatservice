@@ -1,6 +1,6 @@
 'use strict';
 
-// Page elements (remain mostly the same)
+// Page elements
 const loadingPage = document.querySelector('#loading-page');
 const chatPage = document.querySelector('#chat-page');
 const messageForm = document.querySelector('#messageForm');
@@ -11,169 +11,131 @@ const connectedUserFullnameElement = document.querySelector('#connected-user-ful
 const connectedUsersList = document.getElementById('connectedUsers');
 const logout = document.querySelector('#logout');
 
-// --- OIDC Configuration ---
+// OIDC Configuration
 const oidcConfig = {
-    authority: 'http://192.168.1.112:8080/realms/SPSHPAU', // Keycloak Issuer URL
-    client_id: 'spshpau-rest-api', // The Client ID configured in Keycloak for this app
-    redirect_uri: 'http://localhost:8091/', // Where Keycloak redirects back after login
-    post_logout_redirect_uri: 'http://localhost:8091/', // Where Keycloak redirects back after logout
-    response_type: 'code', // Use Authorization Code Flow
-    scope: 'openid profile email', // Standard scopes: openid is required
-    automaticSilentRenew: true, // Enable automatic token renewal
-    loadUserInfo: true, // Load user profile information
+    authority: 'http://192.168.1.112:8080/realms/SPSHPAU',
+    client_id: 'spshpau-rest-api',
+    redirect_uri: 'http://localhost:8091/',
+    post_logout_redirect_uri: 'http://localhost:8091/',
+    response_type: 'code',
+    scope: 'openid profile email',
+    automaticSilentRenew: true,
+    loadUserInfo: true,
     filterProtocolClaims: true,
 };
 
-// --- OIDC User Manager ---
-// Check if oidc is loaded
 if (typeof oidc === 'undefined') {
-    console.error('oidc-client-ts library not found. Please include it in index.html.');
+    console.error('oidc-client-ts library not found.');
     connectingElement.textContent = 'Error: OIDC Client library not found.';
-    connectingElement.style.color = 'red';
-    // Stop execution if library is missing
     throw new Error('oidc-client-ts not loaded');
 }
 const userManager = new oidc.UserManager(oidcConfig);
 
-// --- Global State ---
-let username = null; // Keycloak preferred_username (for display)
-let userUUID = null; // Keycloak sub claim (UUID, as string initially)
-let fullname = null; // Keycloak name
+// Global State
+let username = null;
+let userUUID = null;
+let fullname = null;
 let stompClient = null;
-let selectedUserId = null; // THIS WILL NOW STORE THE RECIPIENT'S UUID
-let currentUser = null; // Stores the user object from userManager
+let selectedUserUuid = null;
+let selectedChatId = null;
+let currentUser = null;
 
-// --- Authentication Functions ---
+let chatRefreshIntervalId = null;
+let chatListRefreshIntervalId = null;
+const REFRESH_INTERVAL_MS = 5000;
 
+let isFetchingChatHistory = false;
+
+// --- Authentication & Initialization ---
 async function getUser() {
     currentUser = await userManager.getUser();
     if (currentUser && !currentUser.expired) {
-        console.log('User is logged in:', currentUser.profile);
         username = currentUser.profile.preferred_username;
         userUUID = currentUser.profile.sub;
         fullname = currentUser.profile.name || username;
         return currentUser;
     }
-    console.log('User not logged in or session expired.');
-    userUUID = null; // Clear UUID if not logged in
+    userUUID = null;
     return null;
 }
 
 async function login() {
-    console.log("login: Starting signinRedirect..."); // ADDED
     try {
         await userManager.signinRedirect({ state: window.location.pathname });
-        console.log("login: signinRedirect called (browser should redirect now)."); // ADDED (May not be reached)
     } catch (error) {
-        console.error('login: Error during signinRedirect:', error); // ADDED
-        // ... existing error handling ...
+        console.error('Error during signinRedirect:', error);
+        connectingElement.textContent = 'Error initiating login.';
+        connectingElement.style.color = 'red';
     }
 }
 
 async function logoutUser() {
     console.log('Logging out...');
-    const user = await userManager.getUser(); // Get user for id_token_hint and payload
-
-    if (stompClient && stompClient.connected && userUUID) { // Check userUUID
-        console.log('Sending disconnect message to backend with payload...');
-        // Send payload with necessary identifiers
-        const disconnectPayload = {
-            userId: userUUID // Use the stored UUID
-            // username, firstName, lastName are optional for disconnect if backend only needs ID
-        };
-        stompClient.send("/app/user.disconnectUser", {}, JSON.stringify(disconnectPayload)); // <-- SEND PAYLOAD
-
-        stompClient.disconnect(() => {
-            console.log('STOMP client disconnected.');
-            userManager.signoutRedirect({ id_token_hint: user ? user.id_token : undefined })
-                .catch(err => console.error("Error during signoutRedirect:", err));
-        });
-    } else {
-        userManager.signoutRedirect({ id_token_hint: user ? user.id_token : undefined })
-            .catch(err => console.error("Error during signoutRedirect:", err));
+    if (chatRefreshIntervalId) {
+        clearInterval(chatRefreshIntervalId);
+        chatRefreshIntervalId = null;
+        console.log('Cleared active chat refresh interval.');
     }
-    // Clear UI state immediately (optional)
+    if (chatListRefreshIntervalId) {
+        clearInterval(chatListRefreshIntervalId);
+        chatListRefreshIntervalId = null;
+        console.log('Cleared chat list refresh interval.');
+    }
+
+    if (stompClient && stompClient.connected && userUUID) {
+        const disconnectPayload = { userId: userUUID };
+        stompClient.send("/app/user.disconnectUser", {}, JSON.stringify(disconnectPayload));
+    }
+    const user = await userManager.getUser();
+    userManager.signoutRedirect({ id_token_hint: user ? user.id_token : undefined })
+        .catch(err => console.error("Error during signoutRedirect:", err));
     chatPage.classList.add('hidden');
     loadingPage.classList.remove('hidden');
     connectingElement.textContent = 'Logging out...';
-    userUUID = null; // Clear UUID on logout
+    userUUID = null;
+    selectedUserUuid = null;
+    selectedChatId = null;
 }
-
-// --- Application Initialization ---
 
 async function initializeApp() {
     try {
-        // Check if the current URL is the redirect callback from Keycloak
         if (window.location.href.includes('code=') && window.location.href.includes('state=')) {
-            console.log('Handling Keycloak redirect callback...');
             const user = await userManager.signinRedirectCallback();
-            console.log('Callback successful, user:', user.profile);
-            // Clean the URL (remove code and state params)
             window.history.replaceState({}, document.title, "/");
             await setupUIAndConnect(user);
         } else {
-            // Not a callback, check if user is already logged in
             const user = await getUser();
             if (user) {
                 await setupUIAndConnect(user);
             } else {
-                // No user logged in, start the login process
                 await login();
             }
         }
     } catch (error) {
         console.error('Error during application initialization:', error);
-        // Handle specific OIDC errors if needed
-        if (error.message === 'No state in response' || error.message === 'No matching state found in storage') {
-            console.warn('State mismatch error, likely indicates an old callback URL or manual navigation. Attempting login again.');
-            await login(); // Try logging in again
-        } else if (error.message === 'Token response failed') {
-            console.error('Failed to exchange code for token. Check Keycloak client config (secret?) and network.');
-            connectingElement.textContent = 'Login failed: Could not get token from Keycloak.';
-            connectingElement.style.color = 'red';
-        } else {
-            connectingElement.textContent = 'Authentication error occurred. Please try again.';
-            connectingElement.style.color = 'red';
-            // Optionally add a button to manually trigger login again
-        }
+        connectingElement.textContent = 'Authentication error. Please try again.';
+        connectingElement.style.color = 'red';
     }
 }
 
 async function setupUIAndConnect(user) {
-    console.log('Setting up UI and connecting WebSocket for user:', user.profile.preferred_username);
-    currentUser = user; // Store user globally
+    currentUser = user;
     username = user.profile.preferred_username;
-    userUUID = user.profile.sub; // <-- Store UUID here too
-    fullname = user.profile.name || username; // Fallback
+    userUUID = user.profile.sub;
+    fullname = user.profile.name || username;
 
-    // Update UI
     loadingPage.classList.add('hidden');
     chatPage.classList.remove('hidden');
     connectedUserFullnameElement.textContent = fullname;
 
-    // Connect to WebSocket
     await connectWebSocket();
 }
 
-
-// --- Helper to get valid access token ---
 async function getAccessToken() {
     const user = await userManager.getUser();
-    if (user && !user.expired) {
-        return user.access_token;
-    } else {
-        // Attempt silent renew or trigger login if token is missing/expired
-        console.warn('Access token missing or expired. Attempting login/refresh.');
-        // Depending on UX, you might trigger signinSilent() or signinRedirect()
-        // For simplicity here, we'll rely on automatic renewal or redirect on next load
-        // Returning null signifies failure to get a token *right now*
-        // More robust handling might involve explicit silent sign-in here.
-        // await userManager.signinSilent(); // Try silent renew explicitly
-        // const refreshedUser = await userManager.getUser();
-        // if (refreshedUser && !refreshedUser.expired) return refreshedUser.access_token;
-        await login(); // Force login if no valid token found
-        return null; // Indicate failure to get token immediately
-    }
+    if (user && !user.expired) return user.access_token;
+    await login();
+    return null;
 }
 
 // --- WebSocket Connection ---
@@ -198,29 +160,20 @@ async function connectWebSocket() {
         return;
     }
 
-    console.log('Connecting to WebSocket with username:', username);
-    connectingElement.textContent = 'Connecting to chat...';
-    // Show connecting message temporarily if needed
-    // loadingPage.classList.remove('hidden');
-    // chatPage.classList.add('hidden');
-
+    console.log('Connecting to WebSocket with userUUID:', userUUID);
     const socket = new SockJS('/ws');
     stompClient = Stomp.over(socket);
-
-    const headers = { 'Authorization': 'Bearer ' + accessToken };
-
-    stompClient.connect(headers, onConnected, onError);
+    stompClient.connect({ 'Authorization': 'Bearer ' + accessToken }, onConnected, onError);
 }
 
-// --- WebSocket Callbacks (onConnected, onError - mostly unchanged logic) ---
 function onConnected() {
     console.log('WebSocket connected successfully.');
     connectingElement.textContent = '';
 
     stompClient.subscribe(`/user/${userUUID}/queue/messages`, onMessageReceived);
+    stompClient.subscribe(`/user/${userUUID}/queue/status-updates`, onMessageStatusUpdate);
     stompClient.subscribe(`/topic/presence`, onPresenceUpdate);
 
-    // Register the connected user
     if (userUUID && username) {
         const connectPayload = {
             userId: userUUID,
@@ -229,72 +182,71 @@ function onConnected() {
             lastName: currentUser.profile.family_name
         };
         stompClient.send("/app/user.addUser", {}, JSON.stringify(connectPayload));
-        console.log('Sent addUser message with payload:', connectPayload);
-    } else {
-        console.error("Cannot send addUser message: Missing user UUID or username.");
     }
 
-    findAndDisplayChats().then(() => {
-        console.log('Initial chat list displayed.');
+    findAndDisplayChatSummaries().then(() => {
+        if (chatListRefreshIntervalId) clearInterval(chatListRefreshIntervalId);
+        chatListRefreshIntervalId = setInterval(findAndDisplayChatSummaries, REFRESH_INTERVAL_MS);
+        console.log('Initial chat list displayed and summary refresh interval started.');
     }).catch(error => {
-        console.error("Error during initial chat list display:", error);
+        console.error("Error during initial chat list display or starting interval:", error);
     });
 }
 
 function onError(error) {
-    // Same error handling as before
-    const errorMsg = 'Could not connect to WebSocket server. Please check backend connection and configuration. May also indicate invalid token.';
-    console.error(errorMsg, error);
-    connectingElement.textContent = errorMsg;
+    console.error('WebSocket Error:', error);
+    connectingElement.textContent = 'WebSocket connection error. Please refresh.';
     connectingElement.style.color = 'red';
-    loadingPage.classList.remove('hidden');
-    chatPage.classList.add('hidden');
-}
 
-// --- Presence Handling (User Connect/Disconnect) ---
-function onPresenceUpdate(payload) {
-    console.log('Presence update received via /topic/presence', payload);
-    try {
-        const updatedUser = JSON.parse(payload.body);
-        if (!updatedUser || !updatedUser.id) return; // Ignore invalid messages
-
-        const listItem = connectedUsersList.querySelector(`[data-user-id="${updatedUser.id}"]`);
-
-        if (listItem) {
-            console.log(`Updating presence for user <span class="math-inline">\{updatedUser\.username\} \(</span>{updatedUser.id}) to ${updatedUser.status}`);
-            let indicator = listItem.querySelector('.online-indicator');
-
-            if (updatedUser.status === 'ONLINE') {
-                if (!indicator) {
-                    indicator = document.createElement('span');
-                    indicator.classList.add('online-indicator');
-                    listItem.querySelector('span').insertAdjacentElement('afterend', indicator);
-                }
-                indicator.classList.remove('offline');
-            } else {
-                if (indicator) {
-                    indicator.classList.add('offline');
-                }
-            }
-        } else {
-            console.log(`User <span class="math-inline">\{updatedUser\.username\} \(</span>{updatedUser.id}) from presence update not found in current chat list.`);
-        }
-    } catch (error) {
-        console.error("Error processing presence update:", error, payload);
+    if (chatRefreshIntervalId) {
+        clearInterval(chatRefreshIntervalId);
+        chatRefreshIntervalId = null;
+        console.log('Cleared active chat refresh interval due to WebSocket error.');
+    }
+    if (chatListRefreshIntervalId) {
+        clearInterval(chatListRefreshIntervalId);
+        chatListRefreshIntervalId = null;
+        console.log('Cleared chat list refresh interval due to WebSocket error.');
     }
 }
 
-// --- User List Handling (Fetch from /chats/me, display status) ---
-async function findAndDisplayChats() {
+// --- Presence & Status Updates ---
+function onPresenceUpdate(payload) {
+    try {
+        const updatedUser = JSON.parse(payload.body);
+        if (!updatedUser || !updatedUser.id) return;
+        const listItem = connectedUsersList.querySelector(`[data-user-id="${updatedUser.id}"]`);
+        if (listItem) {
+            updateOnlineIndicator(listItem, updatedUser.status === 'ONLINE');
+        }
+    } catch (e) { console.error("Error processing presence update:", e); }
+}
+
+function onMessageStatusUpdate(payload) {
+    console.log('Message status update received:', payload);
+    try {
+        const statusUpdate = JSON.parse(payload.body);
+        if (!statusUpdate || !statusUpdate.messageIds || !statusUpdate.newStatus) return;
+
+        statusUpdate.messageIds.forEach(messageId => {
+            const messageElement = chatArea.querySelector(`[data-message-id="${messageId}"]`);
+            if (messageElement) {
+                updateMessageStatusIndicator(messageElement, statusUpdate.newStatus);
+            }
+        });
+    } catch (e) { console.error("Error processing message status update:", e); }
+}
+
+// --- Chat List & Summaries ---
+async function findAndDisplayChatSummaries() {
     const accessToken = await getAccessToken();
     if (!accessToken) {
-        console.error("Cannot fetch chats: Failed to get access token.");
-        connectedUsersList.innerHTML = '<li>Error loading chats: Not authenticated.</li>';
+        connectedUsersList.innerHTML = '<li>Authentication error.</li>';
         return;
     }
     try {
-        console.log('Fetching my chats from /chats/me...');
-        const response = await fetch('/chats/me', {
+        console.log('Fetching chat summaries from /chats/summary...');
+        const response = await fetch('/chats/summary', {
             headers: { 'Authorization': 'Bearer ' + accessToken }
         });
 
@@ -307,214 +259,330 @@ async function findAndDisplayChats() {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
-        let chatPartners = await response.json();
-        chatPartners = chatPartners.filter(user => user.id !== userUUID);
-
+        const chatSummaries = await response.json();
         connectedUsersList.innerHTML = '';
-
-        if (chatPartners.length === 0) {
-            connectedUsersList.innerHTML = '<li>No recent chats found.</li>';
+        if (chatSummaries.length === 0) {
+            connectedUsersList.innerHTML = '<li>No chats found.</li>';
         } else {
-            chatPartners.forEach(user => {
-                appendChatPartnerElement(user, connectedUsersList);
-                if (chatPartners.indexOf(user) < chatPartners.length - 1) {
-                    const separator = document.createElement('li');
-                    separator.classList.add('separator');
-                    connectedUsersList.appendChild(separator);
-                }
+            chatSummaries.forEach(summary => {
+                appendChatPartnerElement(summary, connectedUsersList);
             });
         }
-        console.log('Displayed chat partners:', chatPartners.length);
     } catch (error) {
-        console.error('Error fetching or displaying chats:', error);
-        if (!connectedUsersList.hasChildNodes()) {
-            connectedUsersList.innerHTML = '<li>Could not load chat list.</li>';
-        }
+        console.error('Error fetching chat summaries:', error);
+        connectedUsersList.innerHTML = '<li>Could not load chats.</li>';
     }
 }
 
-function appendChatPartnerElement(user, list) {
+function appendChatPartnerElement(summary, list) {
+    const partner = summary.chatPartner;
     const listItem = document.createElement('li');
     listItem.classList.add('user-item');
-    listItem.id = `user-item-${user.username}`;
-    listItem.dataset.userId = user.id;
-    listItem.dataset.username = user.username;
+    listItem.id = `user-item-${partner.username}`;
+    listItem.dataset.userId = partner.id;
+    listItem.dataset.username = partner.username;
+    listItem.dataset.chatId = summary.chatId;
 
     const userImage = document.createElement('img');
     userImage.src = '../img/user_icon.png';
-    userImage.alt = user.fullName || user.username;
+    userImage.alt = partner.fullName || partner.username;
 
     const usernameSpan = document.createElement('span');
-    usernameSpan.textContent = user.fullName || user.username;
-
-    const onlineIndicator = document.createElement('span');
-    onlineIndicator.classList.add('online-indicator');
-    if (user.status !== 'ONLINE') {
-        onlineIndicator.classList.add('offline');
-    }
-
-    // Span for unread messages count
-    const receivedMsgs = document.createElement('span');
-    receivedMsgs.textContent = '0';
-    receivedMsgs.classList.add('nbr-msg', 'hidden');
+    usernameSpan.textContent = partner.fullName || partner.username;
 
     listItem.appendChild(userImage);
     listItem.appendChild(usernameSpan);
+
+    // Online Indicator
+    const onlineIndicator = document.createElement('span');
+    onlineIndicator.classList.add('online-indicator');
+    updateOnlineIndicator(listItem, partner.status === 'ONLINE', onlineIndicator);
     listItem.appendChild(onlineIndicator);
-    listItem.appendChild(receivedMsgs);
+
+    // Unread Messages Count
+    const unreadMsgsSpan = document.createElement('span');
+    unreadMsgsSpan.classList.add('nbr-msg');
+    if (summary.unreadCount > 0) {
+        unreadMsgsSpan.textContent = summary.unreadCount;
+    } else {
+        unreadMsgsSpan.classList.add('hidden');
+    }
+    listItem.appendChild(unreadMsgsSpan);
 
     listItem.addEventListener('click', userItemClick);
-
     list.appendChild(listItem);
 }
 
-function userItemClick(event) {
-    document.querySelectorAll('.user-item').forEach(item => item.classList.remove('active'));
-    messageForm.classList.remove('hidden');
-
-    const clickedUser = event.currentTarget;
-    clickedUser.classList.add('active');
-
-    // Get the UUID from the data attribute
-    selectedUserId = clickedUser.dataset.userId; // <-- GET UUID HERE
-    const selectedUsername = clickedUser.dataset.username; // Get username for display if needed
-
-    console.log(`Selected user UUID: ${selectedUserId}, Username: ${selectedUsername}`);
-
-    // Fetch and display chat history using UUIDs
-    fetchAndDisplayUserChat().then();
-
-    // Clear notification count (querying by dataset might be needed if ID changed)
-    // Querying the clicked element directly is safer:
-    const nbrMsg = clickedUser.querySelector('.nbr-msg');
-    nbrMsg.classList.add('hidden');
-    nbrMsg.textContent = '0';
+function updateOnlineIndicator(listItem, isOnline, indicatorElement) {
+    let indicator = indicatorElement || listItem.querySelector('.online-indicator');
+    if (isOnline) {
+        if (!indicator) {
+            indicator = document.createElement('span');
+            indicator.classList.add('online-indicator');
+            const usernameSpan = listItem.querySelector('span');
+            if (usernameSpan && usernameSpan.nextSibling) {
+                usernameSpan.parentNode.insertBefore(indicator, usernameSpan.nextSibling);
+            } else if (usernameSpan) {
+                usernameSpan.parentNode.appendChild(indicator);
+            } else {
+                listItem.appendChild(indicator);
+            }
+        }
+        indicator.classList.remove('offline');
+    } else {
+        if (indicator) {
+            indicator.classList.add('offline');
+        }
+    }
 }
 
-// --- Chat Message Handling (fetch needs updated token retrieval) ---
-async function fetchAndDisplayUserChat() {
-    if (!selectedUserId || !userUUID) {
-        console.error("Cannot fetch chat: Missing selected user UUID or current user UUID.");
-        chatArea.innerHTML = '<p>Error fetching chat history.</p>';
+
+async function userItemClick(event) {
+    document.querySelectorAll('.user-item').forEach(item => item.classList.remove('active'));
+    messageForm.classList.remove('hidden');
+    const clickedUserElement = event.currentTarget;
+    clickedUserElement.classList.add('active');
+
+    const newSelectedUserUuid = clickedUserElement.dataset.userId;
+    const newSelectedChatId = clickedUserElement.dataset.chatId;
+
+    console.log(`userItemClick: New selection - User UUID: ${newSelectedUserUuid}, Chat ID: ${newSelectedChatId}`);
+
+    if (chatRefreshIntervalId) {
+        clearInterval(chatRefreshIntervalId);
+        chatRefreshIntervalId = null;
+        console.log('userItemClick: Cleared previous active chat refresh interval.');
+    }
+
+    selectedUserUuid = newSelectedUserUuid;
+    selectedChatId = newSelectedChatId;
+
+    const unreadMsgsSpan = clickedUserElement.querySelector('.nbr-msg');
+    if (unreadMsgsSpan) {
+        unreadMsgsSpan.textContent = '0';
+        unreadMsgsSpan.classList.add('hidden');
+    }
+
+    await fetchAndDisplayUserChat(selectedUserUuid, selectedChatId);
+
+    if (selectedChatId && selectedChatId !== "null" && selectedChatId !== "undefined") {
+        markMessagesAsRead(selectedChatId);
+
+        chatRefreshIntervalId = setInterval(() => {
+            refreshActiveChat(newSelectedUserUuid, newSelectedChatId);
+        }, REFRESH_INTERVAL_MS);
+        console.log(`userItemClick: Active chat refresh interval started for chat ID: ${newSelectedChatId}`);
+    } else {
+        console.warn("userItemClick: No valid chatId to mark messages as read or start refresh interval for user:", selectedUserUuid);
+    }
+}
+
+async function refreshActiveChat(refreshForUserUuid, refreshForChatId) {
+    console.log(`refreshActiveChat: Called for User UUID=${refreshForUserUuid}, Chat ID=${refreshForChatId}`);
+
+    if (selectedUserUuid === refreshForUserUuid &&
+        selectedChatId === refreshForChatId &&
+        !chatPage.classList.contains('hidden') &&
+        !messageForm.classList.contains('hidden')) {
+
+        console.log(`Refreshing active chat with ${refreshForUserUuid} (Chat ID: ${refreshForChatId})`);
+        await fetchAndDisplayUserChat(refreshForUserUuid, refreshForChatId);
+
+        if (refreshForChatId && refreshForChatId !== "null" && refreshForChatId !== "undefined") {
+            markMessagesAsRead(refreshForChatId);
+        }
+    } else {
+        console.log(`refreshActiveChat: Skipped for ${refreshForUserUuid}. Current selection is User: ${selectedUserUuid}, Chat: ${selectedChatId}. Or chat not visible.`);
+    }
+}
+
+// --- Chat Message Handling & Statuses ---
+async function fetchAndDisplayUserChat(targetUserUuid, targetChatId) {
+    console.log(`WorkspaceAndDisplayUserChat CALLED. Current logged-in userUUID: ${userUUID}, Fetching for targetUserUuid: ${targetUserUuid}`);
+    if (isFetchingChatHistory) {
+        console.log("fetchAndDisplayUserChat: Already fetching history, skipping this call.");
         return;
     }
+    if (!targetUserUuid || !userUUID) {
+        console.error("fetchAndDisplayUserChat: Missing target user UUID or current user UUID.", { targetUserUuid, userUUID });
+        return;
+    }
+    isFetchingChatHistory = true;
+
     const accessToken = await getAccessToken();
     if (!accessToken) {
-        console.error("Cannot fetch chat: Failed to get access token.");
-        chatArea.innerHTML = '<p>Authentication error. Cannot load chat.</p>';
+        console.error("fetchAndDisplayUserChat: Failed to get access token.");
+        isFetchingChatHistory = false;
         return;
     }
 
     try {
-        console.log(`Workspaceing chat between ${userUUID} and ${selectedUserId}`);
-        // Use UUIDs in the REST URL
-        const userChatResponse = await fetch(`/messages/${userUUID}/${selectedUserId}`, {
+        const response = await fetch(`/messages/${userUUID}/${targetUserUuid}`, {
             headers: { 'Authorization': 'Bearer ' + accessToken }
         });
+        console.log('fetchAndDisplayUserChat - Response status:', response.status, 'for target:', targetUserUuid);
 
-        if (!userChatResponse.ok) {
-            if (userChatResponse.status === 401) {
-                console.warn("Unauthorized fetching chat history. Token might be expired.");
-                await login(); // Re-trigger login
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`WorkspaceAndDisplayUserChat - HTTP error! Status: ${response.status}, Body: ${errorText}`);
+            if (targetUserUuid === selectedUserUuid) {
+                chatArea.innerHTML = `<p>Error loading chat history: ${response.statusText}</p>`;
             }
-            throw new Error(`HTTP error! status: ${userChatResponse.status}`);
+            if (response.status === 401) { await login(); }
+            isFetchingChatHistory = false;
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const userChat = await userChatResponse.json();
-        chatArea.innerHTML = '';
-        if (userChat.length === 0) {
-            // Optional: Get selected username for display message
-            const selectedUserElement = connectedUsersList.querySelector(`[data-user-id="${selectedUserId}"]`);
-            const selectedUsernameDisplay = selectedUserElement ? selectedUserElement.dataset.username : selectedUserId;
-            chatArea.innerHTML = `<p>No messages with ${selectedUsernameDisplay} yet.</p>`;
+
+        const messages = await response.json();
+        console.log('fetchAndDisplayUserChat - Received messages:', messages, 'for target:', targetUserUuid);
+
+        if (targetUserUuid === selectedUserUuid) {
+            chatArea.innerHTML = '';
+            if (messages.length === 0) {
+                const selectedUserElement = connectedUsersList.querySelector(`[data-user-id="${targetUserUuid}"]`);
+                const selectedUsernameDisplay = selectedUserElement ? selectedUserElement.dataset.username : targetUserUuid;
+                chatArea.innerHTML = `<p>No messages with ${selectedUsernameDisplay} yet.</p>`;
+            } else {
+                messages.forEach(msg => {
+                    displayMessage(msg.senderId, msg.content, msg.id, msg.status, msg.sentAt, msg.readAt || msg.deliveredAt || msg.sentAt);
+                });
+            }
+            chatArea.scrollTop = chatArea.scrollHeight;
+            console.log(`WorkspaceAndDisplayUserChat - Displayed ${messages.length} messages for target ${targetUserUuid}.`);
         } else {
-            // Display message - assumes chat.senderId from backend IS the UUID
-            userChat.forEach(chat => displayMessage(chat.senderId, chat.content));
+            console.log(`WorkspaceAndDisplayUserChat: Fetched history for ${targetUserUuid}, but current selection is ${selectedUserUuid}. UI not updated.`);
         }
-        chatArea.scrollTop = chatArea.scrollHeight;
-        console.log(`Displayed ${userChat.length} messages.`);
-    } catch(error) {
-        console.error('Error fetching chat history:', error);
-        chatArea.innerHTML = '<p>Could not load chat history.</p>';
+
+    } catch (error) {
+        console.error('Error in fetchAndDisplayUserChat catch block:', error);
+        if (targetUserUuid === selectedUserUuid) {
+            chatArea.innerHTML = '<p>Could not load chat history due to an error.</p>';
+        }
+    } finally {
+        isFetchingChatHistory = false;
     }
 }
 
-// sendMessage remains the same (uses global username, selectedUserId)
 function sendMessage(event) {
     event.preventDefault();
     const messageContent = messageInput.value.trim();
-    // Ensure selectedUserId is a UUID and userUUID is set
-    if (messageContent && stompClient && stompClient.connected && selectedUserId && userUUID) {
-        const chatMessage = {
-            senderId: userUUID,       // Current user's UUID
-            recipientId: selectedUserId, // Selected user's UUID
+    if (messageContent && stompClient && stompClient.connected && selectedUserUuid && userUUID) {
+        const tempMessageId = `temp-${Date.now()}`;
+        const sentAt = new Date().toISOString();
+
+        displayMessage(userUUID, messageContent, tempMessageId, 'SENT', sentAt, sentAt);
+
+        const chatMessagePayload = {
+            senderId: userUUID,
+            recipientId: selectedUserUuid,
             content: messageContent,
-            timestamp: new Date()
         };
-        console.log('Sending chat message via STOMP:', chatMessage);
-        // Assumes backend /app/chat handler expects UUIDs in ChatMessage payload
-        stompClient.send("/app/chat", {}, JSON.stringify(chatMessage));
-
-        // Display message locally using UUID
-        displayMessage(userUUID, messageContent);
+        stompClient.send("/app/chat", {}, JSON.stringify(chatMessagePayload));
         messageInput.value = '';
-        chatArea.scrollTop = chatArea.scrollHeight;
-    } else {
-        if (!stompClient || !stompClient.connected) console.error("Cannot send message: WebSocket not connected.");
-        if (!selectedUserId) console.error("Cannot send message: No recipient selected.");
-        if (!username) console.error("Cannot send message: Current user not identified.");
     }
 }
 
-// onMessageReceived remains the same as previous version
 function onMessageReceived(payload) {
-    console.log('Message received via WebSocket', payload);
-    const message = JSON.parse(payload.body); // Assumes message.senderId IS UUID
+    console.log('Raw message (ChatNotification) received:', payload);
+    try {
+        const notification = JSON.parse(payload.body);
+        displayMessage(notification.senderId, notification.content, notification.id, notification.status, notification.sentAt, notification.statusTimestamp);
 
-    // Compare received UUID with selected UUID
-    if (selectedUserId && selectedUserId === message.senderId) {
-        displayMessage(message.senderId, message.content);
-        chatArea.scrollTop = chatArea.scrollHeight;
-    } else {
-        // Find user item by data attribute containing the UUID
-        console.log(`Notification: New message from ${message.senderId}`);
-        const notifiedUserElement = connectedUsersList.querySelector(`[data-user-id="${message.senderId}"]`);
-
-        if (notifiedUserElement) {
-            const nbrMsg = notifiedUserElement.querySelector('.nbr-msg');
-            if (nbrMsg) {
-                nbrMsg.classList.remove('hidden');
-                nbrMsg.textContent = isNaN(parseInt(nbrMsg.textContent)) ? '1' : (parseInt(nbrMsg.textContent) + 1).toString();
+        if (selectedChatId && selectedChatId === notification.chatId && notification.recipientId === userUUID) {
+            console.log("New message is for active chat, marking as read immediately.");
+            markMessagesAsRead(selectedChatId);
+        } else if (notification.recipientId === userUUID) {
+            const senderListItem = connectedUsersList.querySelector(`[data-user-id="${notification.senderId}"]`);
+            if (senderListItem) {
+                const unreadMsgsSpan = senderListItem.querySelector('.nbr-msg');
+                if (unreadMsgsSpan) {
+                    unreadMsgsSpan.classList.remove('hidden');
+                    unreadMsgsSpan.textContent = (parseInt(unreadMsgsSpan.textContent) || 0) + 1;
+                }
             }
-        } else {
-            console.warn(`Received message from unknown or offline user: ${message.senderId}`);
-            findAndDisplayConnectedUsers(); // Refresh user list if sender unknown
         }
-    }
+    } catch (e) { console.error("Error processing received message:", e); }
 }
 
-// displayMessage remains the same as previous version
-function displayMessage(senderIdUUID, content) {
+function displayMessage(senderId, content, messageId, status, sentAt, statusTimestamp) {
     const messageContainer = document.createElement('div');
     messageContainer.classList.add('message');
+    messageContainer.dataset.messageId = messageId;
 
-    // Compare with current user's UUID
-    if (senderIdUUID === userUUID) {
+    const messageText = document.createElement('p');
+    messageText.textContent = content;
+
+    const timeSpan = document.createElement('span');
+    timeSpan.classList.add('message-timestamp');
+    timeSpan.textContent = new Date(sentAt).toLocaleTimeString();
+
+    const statusSpan = document.createElement('span');
+    statusSpan.classList.add('message-status');
+
+    if (senderId === userUUID) {
         messageContainer.classList.add('sender');
+        updateMessageStatusIndicator(messageContainer, status);
     } else {
         messageContainer.classList.add('receiver');
     }
-    const message = document.createElement('p');
-    message.textContent = content;
-    messageContainer.appendChild(message);
+
+    messageContainer.appendChild(messageText);
+    messageContainer.appendChild(timeSpan);
+
     chatArea.appendChild(messageContainer);
     chatArea.scrollTop = chatArea.scrollHeight;
 }
 
-// --- Event Listeners ---
+// Helper to update status indicator on a message element
+function updateMessageStatusIndicator(messageElement, newStatus) {
+    let statusSpan = messageElement.querySelector('.message-status');
+    if (!statusSpan && messageElement.classList.contains('sender')) {
+        statusSpan = document.createElement('span');
+        statusSpan.classList.add('message-status');
+        const pTag = messageElement.querySelector('p');
+        if (pTag) {
+            pTag.appendChild(statusSpan);
+        } else {
+            messageElement.appendChild(statusSpan);
+        }
+    }
+
+    if (statusSpan) {
+        statusSpan.classList.remove('sent', 'delivered', 'read');
+        let statusText = '';
+        switch (newStatus) {
+            case 'SENT':
+                statusText = '✓';
+                statusSpan.classList.add('sent');
+                break;
+            case 'DELIVERED':
+                statusText = '✓✓';
+                statusSpan.classList.add('delivered');
+                break;
+            case 'READ':
+                statusText = '✓✓';
+                statusSpan.classList.add('read');
+                break;
+            default:
+                statusText = '';
+        }
+        statusSpan.textContent = statusText;
+    }
+}
+
+
+// New function to send markAsRead to backend
+function markMessagesAsRead(chatIdToMark) {
+    if (stompClient && stompClient.connected && chatIdToMark) {
+        console.log(`Sending markAsRead for chatId: ${chatIdToMark}`);
+        const payload = { chatId: chatIdToMark };
+        stompClient.send("/app/chat.markAsRead", {}, JSON.stringify(payload));
+    } else {
+        console.warn("Cannot mark messages as read: STOMP not connected or no chatId.", {stomp: stompClient, chatId: chatIdToMark});
+    }
+}
+
+// --- Event Listeners & App Start ---
 messageForm.addEventListener('submit', sendMessage, true);
-logout.addEventListener('click', logoutUser, true); // Use new logout function
-
-// --- Application
-
-console.log("main.js: Script loaded, calling initializeApp...");
+logout.addEventListener('click', logoutUser, true);
 initializeApp();
